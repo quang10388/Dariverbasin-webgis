@@ -7,6 +7,22 @@ from folium.raster_layers import ImageOverlay
 
 import streamlit as st
 import leafmap.foliumap as leafmap
+# ===== BẢNG MÀU LULC (giống GEE) =====
+# Key = mã pixel trong file Phan_loai_20xx.tif
+LULC_CLASSES = {
+    1: ("Loại khác", "#000000"),   # đen
+    2: ("Mặt nước", "#1f78b4"),   # xanh dương
+    3: ("Nông nghiệp", "#ffd92f"),# vàng
+    4: ("Rừng", "#4daf4a"),       # xanh lá
+    5: ("Dân cư", "#e41a1c"),     # đỏ
+    6: ("Đất trống", "#bdbdbd"),  # xám
+}
+
+# Danh sách màu theo thứ tự mã (dùng cho palette)
+LULC_PALETTE = [LULC_CLASSES[k][1] for k in sorted(LULC_CLASSES.keys())]
+LULC_VMIN = min(LULC_CLASSES.keys())
+LULC_VMAX = max(LULC_CLASSES.keys())
+
 
 # --- Cấu hình chung ---
 DATA_DIR = Path(__file__).parent / "data"
@@ -167,10 +183,11 @@ def add_dem_soil_layers(m):
 def add_lulc_layers(m):
     """Lớp sử dụng đất / che phủ (LULC) theo năm."""
     st.sidebar.subheader("LULC theo năm")
+
     year = st.sidebar.selectbox(
         "Chọn năm LULC",
-        options=["Không hiển thị", "2020", "2021", "2022", "2023", "2024"],
-        index=0,
+        options=["Không hiển thị", 2020, 2021, 2022, 2023, 2024],
+        index=4,  # mặc định 2024
     )
 
     if year == "Không hiển thị":
@@ -179,17 +196,38 @@ def add_lulc_layers(m):
     tif_name = f"Phan_loai_{year}.tif"
     lulc_fp = DATA_DIR / tif_name
 
-    if lulc_fp.exists():
-        add_raster_overlay(
-            m,
-            lulc_fp,
-            layer_name=f"LULC {year}",
-            colormap="tab20",
-            opacity=1.0,
-            nodata=0,  # ngoài lưu vực = 0 → trong suốt
-        )
-    else:
+    if not lulc_fp.exists():
         st.sidebar.warning(f"Không tìm thấy file {tif_name} trong thư mục data/")
+        return
+
+    # Vẽ LULC với palette rời rạc giống GEE
+    m.add_raster(
+        str(lulc_fp),
+        layer_name=f"LULC {year}",
+        # nodata = 0 bên ngoài lưu vực → trong suốt
+        nodata=0,
+        opacity=0.9,          # màu đậm, rõ
+        vmin=LULC_VMIN,
+        vmax=LULC_VMAX,
+        palette=LULC_PALETTE, # dùng bảng màu rời rạc
+    )
+
+    # Hiển thị chú giải nhỏ trong sidebar
+    with st.sidebar.expander("Chú giải lớp phủ"):
+        for code in sorted(LULC_CLASSES.keys()):
+            name, color = LULC_CLASSES[code]
+            st.markdown(
+                f"""
+                <div style="display:flex;align-items:center;margin-bottom:2px;">
+                    <div style="width:14px;height:14px;
+                                background:{color};
+                                border:1px solid #555;
+                                margin-right:6px;"></div>
+                    <span>{code}: {name}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 def add_reservoir_hydro_layers(m):
