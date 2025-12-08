@@ -7,18 +7,19 @@ from folium.raster_layers import ImageOverlay
 
 import streamlit as st
 import leafmap.foliumap as leafmap
+
 # ===== BẢNG MÀU LULC (giống GEE) =====
 # Key = mã pixel trong file Phan_loai_20xx.tif
 LULC_CLASSES = {
     1: ("Loại khác", "#000000"),   # đen
-    2: ("Mặt nước", "#1f78b4"),   # xanh dương
-    3: ("Nông nghiệp", "#ffd92f"),# vàng
-    4: ("Rừng", "#4daf4a"),       # xanh lá
-    5: ("Dân cư", "#e41a1c"),     # đỏ
-    6: ("Đất trống", "#bdbdbd"),  # xám
+    2: ("Mặt nước", "#1f78b4"),    # xanh dương
+    3: ("Nông nghiệp", "#ffd92f"), # vàng
+    4: ("Rừng", "#4daf4a"),        # xanh lá
+    5: ("Dân cư", "#e41a1c"),      # đỏ
+    6: ("Đất trống", "#bdbdbd"),   # xám
 }
 
-# Danh sách màu theo thứ tự mã (dùng cho palette)
+# Danh sách màu theo thứ tự mã (nếu cần dùng nơi khác)
 LULC_PALETTE = [LULC_CLASSES[k][1] for k in sorted(LULC_CLASSES.keys())]
 LULC_VMIN = min(LULC_CLASSES.keys())
 LULC_VMAX = max(LULC_CLASSES.keys())
@@ -34,7 +35,7 @@ DEFAULT_ZOOM = 7
 
 # ---------------------------------------------------------------------
 # Helper: vẽ raster (.tif) lên folium mà KHÔNG dùng localtileserver
-# (dùng cho DEM, HWSD, LULC). Làm việc tốt cả trên Streamlit Cloud.
+# (dùng cho DEM, HWSD). Làm việc tốt cả trên Streamlit Cloud.
 # ---------------------------------------------------------------------
 def add_raster_overlay(
     m,
@@ -50,7 +51,7 @@ def add_raster_overlay(
     """Đọc 1-band GeoTIFF và phủ lên bản đồ.
 
     - Tự downsample nếu raster quá lớn (max_size ~ số pixel theo chiều dài nhất).
-    - nodata: giá trị cần làm trong suốt (ví dụ LULC ngoài lưu vực = 0).
+    - nodata: giá trị cần làm trong suốt.
     """
     raster_path = Path(raster_path)
     if not raster_path.exists():
@@ -77,7 +78,6 @@ def add_raster_overlay(
             )
         else:
             data = src.read(1)
-
         bounds = src.bounds
         if nodata is None:
             nodata = src.nodata
@@ -118,6 +118,77 @@ def add_raster_overlay(
 
 
 # ---------------------------------------------------------------------
+# Helper riêng cho LULC: tô màu rời rạc theo LULC_CLASSES (không dùng localtileserver)
+# ---------------------------------------------------------------------
+def add_lulc_overlay(
+    m,
+    raster_path: Path,
+    layer_name: str,
+    nodata: int | None = 0,
+    opacity: float = 0.9,
+    max_size: int = 2000,
+):
+    """Vẽ LULC với bảng màu rời rạc LULC_CLASSES (không dùng localtileserver)."""
+    raster_path = Path(raster_path)
+    if not raster_path.exists():
+        st.sidebar.warning(f"Không tìm thấy raster: {raster_path.name}")
+        return
+
+    with rasterio.open(raster_path) as src:
+        height, width = src.height, src.width
+        scale = max(height, width) / max_size if max(height, width) > max_size else 1.0
+
+        if scale > 1.0:
+            out_shape = (int(height / scale), int(width / scale))
+            data = src.read(
+                1,
+                out_shape=out_shape,
+                resampling=Resampling.nearest,
+            )
+        else:
+            data = src.read(1)
+        bounds = src.bounds
+
+    data = data.astype("int32")
+
+    # Mask nodata và giá trị không hợp lệ
+    mask = ~np.isfinite(data)
+    if nodata is not None:
+        mask |= data == nodata
+
+    # Giá trị ngoài khoảng mã lớp → xem như nodata
+    codes = sorted(LULC_CLASSES.keys())
+    max_code = max(codes)
+    data = np.where((data >= 0) & (data <= max_code), data, 0)
+    data = np.where(mask, 0, data)
+
+    # Bảng tra màu RGBA, index = mã lớp
+    lut = np.zeros((max_code + 1, 4), dtype=np.uint8)
+    for code in codes:
+        _, hex_color = LULC_CLASSES[code]
+        hex_color = hex_color.lstrip("#")
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        lut[code, 0] = r
+        lut[code, 1] = g
+        lut[code, 2] = b
+        lut[code, 3] = int(255 * opacity)
+
+    img = lut[data]  # (H, W, 4)
+
+    img_overlay = ImageOverlay(
+        image=img,
+        bounds=[[bounds.bottom, bounds.left], [bounds.top, bounds.right]],
+        opacity=1.0,  # alpha đã nằm trong img
+        name=layer_name,
+        interactive=True,
+        cross_origin=False,
+    )
+    img_overlay.add_to(m)
+
+
+# ---------------------------------------------------------------------
 # Các lớp bản đồ
 # ---------------------------------------------------------------------
 def add_basemap_control(m):
@@ -134,6 +205,8 @@ def add_basin_layers(m):
     """Ranh lưu vực & sông chính."""
     basin_fp = DATA_DIR / "Da_River_Basin.gpkg"
     streams_fp = DATA_DIR / "Da_Streams.gpkg"
+
+    st.sidebar.subheader("Lưu vực & sông suối")
 
     if st.sidebar.checkbox("Ranh lưu vực Đà", value=True) and basin_fp.exists():
         m.add_vector(
@@ -201,15 +274,12 @@ def add_lulc_layers(m):
         return
 
     # Vẽ LULC với palette rời rạc giống GEE
-    m.add_raster(
-        str(lulc_fp),
+    add_lulc_overlay(
+        m,
+        lulc_fp,
         layer_name=f"LULC {year}",
-        # nodata = 0 bên ngoài lưu vực → trong suốt
-        nodata=0,
-        opacity=0.9,          # màu đậm, rõ
-        vmin=LULC_VMIN,
-        vmax=LULC_VMAX,
-        palette=LULC_PALETTE, # dùng bảng màu rời rạc
+        nodata=0,           # 0 = ngoài lưu vực → trong suốt
+        opacity=0.9,        # màu đậm, rõ
     )
 
     # Hiển thị chú giải nhỏ trong sidebar
@@ -218,11 +288,9 @@ def add_lulc_layers(m):
             name, color = LULC_CLASSES[code]
             st.markdown(
                 f"""
-                <div style="display:flex;align-items:center;margin-bottom:2px;">
-                    <div style="width:14px;height:14px;
-                                background:{color};
-                                border:1px solid #555;
-                                margin-right:6px;"></div>
+                <div style="display:flex;align-items:center;margin-bottom:4px">
+                    <div style="width:14px;height:14px;background:{color};
+                                border:1px solid #555;margin-right:6px"></div>
                     <span>{code}: {name}</span>
                 </div>
                 """,
@@ -238,52 +306,50 @@ def add_reservoir_hydro_layers(m):
     res_cn = DATA_DIR / "Reservoirs_Dariverbasin_China.gpkg"
     hyd_vn = DATA_DIR / "Location_hydropower_Dariverbasin_Vietnam.gpkg"
     hyd_cn = DATA_DIR / "Location_hydropower_Dariverbasin_China.gpkg"
-    station_vn = DATA_DIR / "Hydro_Station_Vietnam.gpkg"
+    hydro_station = DATA_DIR / "Hydro_Station_Vietnam.gpkg"
 
-    if st.sidebar.checkbox("Hồ chứa (VN)", value=True) and res_vn.exists():
+    if st.sidebar.checkbox("Hồ chứa (VN)", value=False) and res_vn.exists():
         m.add_vector(
             str(res_vn),
-            layer_name="Hồ chứa Việt Nam",
-            style={"color": "cyan", "radius": 4, "fillColor": "cyan"},
-            info_mode="on_click",
+            layer_name="Hồ chứa VN",
+            style={"color": "cyan", "weight": 1, "fillOpacity": 0.5},
         )
 
     if st.sidebar.checkbox("Hồ chứa (TQ)", value=False) and res_cn.exists():
         m.add_vector(
             str(res_cn),
-            layer_name="Hồ chứa Trung Quốc",
-            style={"color": "darkcyan", "radius": 4, "fillColor": "darkcyan"},
-            info_mode="on_click",
+            layer_name="Hồ chứa TQ",
+            style={"color": "magenta", "weight": 1, "fillOpacity": 0.5},
         )
 
-    if st.sidebar.checkbox("Nhà máy thủy điện (VN)", value=True) and hyd_vn.exists():
+    if st.sidebar.checkbox("Nhà máy thủy điện (VN)", value=False) and hyd_vn.exists():
         m.add_vector(
             str(hyd_vn),
-            layer_name="Thủy điện VN",
-            style={"color": "yellow", "radius": 5, "fillColor": "yellow"},
-            info_mode="on_click",
+            layer_name="Nhà máy thủy điện VN",
+            style={"color": "orange", "radius": 4},
         )
 
     if st.sidebar.checkbox("Nhà máy thủy điện (TQ)", value=False) and hyd_cn.exists():
         m.add_vector(
             str(hyd_cn),
-            layer_name="Thủy điện TQ",
-            style={"color": "orange", "radius": 5, "fillColor": "orange"},
-            info_mode="on_click",
+            layer_name="Nhà máy thủy điện TQ",
+            style={"color": "purple", "radius": 4},
         )
 
-    if st.sidebar.checkbox("Trạm thủy văn (VN)", value=True) and station_vn.exists():
+    if st.sidebar.checkbox("Trạm thủy văn (VN)", value=False) and hydro_station.exists():
         m.add_vector(
-            str(station_vn),
+            str(hydro_station),
             layer_name="Trạm thủy văn VN",
-            style={"color": "black", "radius": 5, "fillColor": "white"},
-            info_mode="on_click",
+            style={"color": "blue", "radius": 4},
         )
 
 
+# ---------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------
 def main():
     st.set_page_config(
-        page_title="WebGIS sông Đà – Hồ chứa & LULC",
+        page_title="WebGIS trình diễn kết quả – Lưu vực sông Đà",
         layout="wide",
     )
 
@@ -292,9 +358,10 @@ def main():
     st.markdown(
         """
         **Chức năng chính:**
-        - Bật/tắt các lớp: ranh lưu vực, sông suối, DEM, soil, LULC.
-        - Xem bản đồ hồ chứa, nhà máy thủy điện, trạm thủy văn.
-        - Chọn năm LULC (2020–2024) để so sánh biến động sử dụng đất.
+
+        * Bật/tắt các lớp: ranh lưu vực, sông suối, DEM, soil, LULC.
+        * Xem bản đồ hồ chứa, nhà máy thủy điện, trạm thủy văn.
+        * Chọn năm LULC (2020–2024) để so sánh biến động sử dụng đất.
         """
     )
 
