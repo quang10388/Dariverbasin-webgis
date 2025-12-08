@@ -14,3 +14,4 @@ pyproj
 numpy
 pandas
 localtileserver
+psutil
