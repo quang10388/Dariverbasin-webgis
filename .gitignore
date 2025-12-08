@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Streamlit local config
+.streamlit/
+
+# IDE
+.vscode/
+.idea/
+
+# Không có env/venv trong thư mục này, nhưng phòng khi sau này tạo
+env/
+venv/
+.venv/
