@@ -13,3 +13,4 @@ pyproj
 # cơ bản (thường có sẵn nhưng khai báo cho chắc)
 numpy
 pandas
+localtileserver
