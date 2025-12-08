@@ -8,6 +8,7 @@ from folium.raster_layers import ImageOverlay
 import streamlit as st
 import leafmap.foliumap as leafmap
 
+
 # ===== BẢNG MÀU LULC (giống GEE) =====
 # Key = mã pixel trong file Phan_loai_20xx.tif
 LULC_CLASSES = {
@@ -192,13 +193,31 @@ def add_lulc_overlay(
 # Các lớp bản đồ
 # ---------------------------------------------------------------------
 def add_basemap_control(m):
-    """Chọn nền bản đồ trong sidebar và thêm vào map."""
+    """Chọn nền bản đồ & (tuỳ chọn) lớp nhãn Việt Nam."""
+    st.sidebar.subheader("Nền bản đồ")
+
+    # Nền chính: dùng các basemap có sẵn trong leafmap
     basemap_name = st.sidebar.selectbox(
-        "Nền bản đồ",
+        "Chọn nền bản đồ",
         options=["OpenStreetMap", "OpenTopoMap", "Esri.WorldImagery"],
         index=2,  # mặc định ảnh vệ tinh
     )
     m.add_basemap(basemap_name)
+
+    # Lớp nhãn Việt Nam (có Hoàng Sa, Trường Sa, Biển Đông...)
+    # Dữ liệu từ dịch vụ VietnamLabels của Esri
+    if st.sidebar.checkbox("Bật lớp nhãn Việt Nam (Hoàng Sa, Trường Sa...)", value=False):
+        vn_label_url = (
+            "https://tiles.arcgis.com/tiles/EaQ3hSM51DBnlwMq/"
+            "arcgis/rest/services/VietnamLabels/MapServer/tile/{z}/{y}/{x}"
+        )
+        m.add_tile_layer(
+            vn_label_url,
+            name="Vietnam labels (Esri)",
+            attribution="Esri VietnamLabels",
+            overlay=True,
+            control=True,
+        )
 
 
 def add_basin_layers(m):
