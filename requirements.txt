@@ -10,8 +10,7 @@ fiona
 shapely
 pyproj
 
-# cơ bản (thường có sẵn nhưng khai báo cho chắc)
+# plotting & utilities
+matplotlib
 numpy
 pandas
-localtileserver
-psutil
