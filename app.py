@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import numpy as np
 import rasterio
@@ -6,11 +7,12 @@ from rasterio.enums import Resampling
 from folium.raster_layers import ImageOverlay
 
 import streamlit as st
-import leafmap.foliumap as leafmap
-
+import folium
+from streamlit_folium import st_folium
+import geopandas as gpd
+from PIL import Image
 
 # ===== BẢNG MÀU LULC (giống GEE) =====
-# Key = mã pixel trong file Phan_loai_20xx.tif
 LULC_CLASSES = {
     1: ("Loại khác", "#000000"),   # đen
     2: ("Mặt nước", "#1f78b4"),    # xanh dương
@@ -20,23 +22,17 @@ LULC_CLASSES = {
     6: ("Đất trống", "#bdbdbd"),   # xám
 }
 
-# Danh sách màu theo thứ tự mã (nếu cần dùng nơi khác)
-LULC_PALETTE = [LULC_CLASSES[k][1] for k in sorted(LULC_CLASSES.keys())]
-LULC_VMIN = min(LULC_CLASSES.keys())
-LULC_VMAX = max(LULC_CLASSES.keys())
-
-
 # --- Cấu hình chung ---
 DATA_DIR = Path(__file__).parent / "data"
+RES_PLOT_DIR = DATA_DIR / "reservoir_plots"
 
-# Tâm bản đồ khoảng lưu vực sông Đà (chỉnh nếu muốn)
+# Tâm bản đồ khoảng lưu vực sông Đà
 DEFAULT_CENTER = [21.5, 104.5]  # [lat, lon]
 DEFAULT_ZOOM = 7
 
 
 # ---------------------------------------------------------------------
-# Helper: vẽ raster (.tif) lên folium mà KHÔNG dùng localtileserver
-# (dùng cho DEM, HWSD). Làm việc tốt cả trên Streamlit Cloud.
+# Helper: vẽ raster (.tif) lên folium (DEM, HWSD)
 # ---------------------------------------------------------------------
 def add_raster_overlay(
     m,
@@ -49,22 +45,14 @@ def add_raster_overlay(
     vmax: float | None = None,
     max_size: int = 2000,
 ):
-    """Đọc 1-band GeoTIFF và phủ lên bản đồ.
-
-    - Tự downsample nếu raster quá lớn (max_size ~ số pixel theo chiều dài nhất).
-    - nodata: giá trị cần làm trong suốt.
-    """
+    """Đọc 1-band GeoTIFF và phủ lên bản đồ với colormap liên tục."""
     raster_path = Path(raster_path)
     if not raster_path.exists():
         st.sidebar.warning(f"Không tìm thấy raster: {raster_path.name}")
         return
 
-    try:
-        import matplotlib.cm as cm
-        import matplotlib.colors as colors
-    except Exception as e:  # pragma: no cover
-        st.sidebar.error(f"Thiếu matplotlib: {e}")
-        return
+    import matplotlib.cm as cm
+    import matplotlib.colors as colors
 
     with rasterio.open(raster_path) as src:
         height, width = src.height, src.width
@@ -92,6 +80,10 @@ def add_raster_overlay(
 
     data = np.where(mask, np.nan, data)
 
+    if np.all(np.isnan(data)):
+        st.sidebar.warning(f"{layer_name}: tất cả đều NaN – không hiển thị.")
+        return
+
     # Tự tính khoảng màu nếu chưa cho
     if vmin is None:
         vmin = float(np.nanpercentile(data, 2))
@@ -118,9 +110,6 @@ def add_raster_overlay(
     img_overlay.add_to(m)
 
 
-# ---------------------------------------------------------------------
-# Helper riêng cho LULC: tô màu rời rạc theo LULC_CLASSES (không dùng localtileserver)
-# ---------------------------------------------------------------------
 def add_lulc_overlay(
     m,
     raster_path: Path,
@@ -129,7 +118,7 @@ def add_lulc_overlay(
     opacity: float = 0.9,
     max_size: int = 2000,
 ):
-    """Vẽ LULC với bảng màu rời rạc LULC_CLASSES (không dùng localtileserver)."""
+    """Vẽ LULC với bảng màu rời rạc LULC_CLASSES."""
     raster_path = Path(raster_path)
     if not raster_path.exists():
         st.sidebar.warning(f"Không tìm thấy raster: {raster_path.name}")
@@ -157,7 +146,6 @@ def add_lulc_overlay(
     if nodata is not None:
         mask |= data == nodata
 
-    # Giá trị ngoài khoảng mã lớp → xem như nodata
     codes = sorted(LULC_CLASSES.keys())
     max_code = max(codes)
     data = np.where((data >= 0) & (data <= max_code), data, 0)
@@ -181,7 +169,7 @@ def add_lulc_overlay(
     img_overlay = ImageOverlay(
         image=img,
         bounds=[[bounds.bottom, bounds.left], [bounds.top, bounds.right]],
-        opacity=1.0,  # alpha đã nằm trong img
+        opacity=1.0,
         name=layer_name,
         interactive=True,
         cross_origin=False,
@@ -190,68 +178,38 @@ def add_lulc_overlay(
 
 
 # ---------------------------------------------------------------------
-# Các lớp bản đồ
+# Vector layers (lưu vực, sông suối, hồ chứa, nhà máy...)
 # ---------------------------------------------------------------------
-def add_basemap_control(m):
-    """Chọn nền bản đồ & (tuỳ chọn) lớp nhãn Việt Nam."""
-    st.sidebar.subheader("Nền bản đồ")
-
-    # Nền chính: dùng các basemap có sẵn trong leafmap
-    basemap_name = st.sidebar.selectbox(
-        "Chọn nền bản đồ",
-        options=["OpenStreetMap", "OpenTopoMap", "Esri.WorldImagery"],
-        index=2,  # mặc định ảnh vệ tinh
-    )
-    m.add_basemap(basemap_name)
-
-    # Lớp nhãn Việt Nam (có Hoàng Sa, Trường Sa, Biển Đông...)
-    # Dữ liệu từ dịch vụ VietnamLabels của Esri
-    if st.sidebar.checkbox("Bật lớp nhãn Việt Nam (Hoàng Sa, Trường Sa...)", value=False):
-        vn_label_url = (
-            "https://tiles.arcgis.com/tiles/EaQ3hSM51DBnlwMq/"
-            "arcgis/rest/services/VietnamLabels/MapServer/tile/{z}/{y}/{x}"
-        )
-        m.add_tile_layer(
-            vn_label_url,
-            name="Vietnam labels (Esri)",
-            attribution="Esri VietnamLabels",
-            overlay=True,
-            control=True,
-        )
-
-
 def add_basin_layers(m):
-    """Ranh lưu vực & sông chính."""
     basin_fp = DATA_DIR / "Da_River_Basin.gpkg"
     streams_fp = DATA_DIR / "Da_Streams.gpkg"
 
     st.sidebar.subheader("Lưu vực & sông suối")
 
     if st.sidebar.checkbox("Ranh lưu vực Đà", value=True) and basin_fp.exists():
-        m.add_vector(
-            str(basin_fp),
-            layer_name="Lưu vực sông Đà",
-            style={"color": "red", "weight": 2, "fillOpacity": 0},
-        )
+        gdf = gpd.read_file(basin_fp)
+        folium.GeoJson(
+            gdf,
+            name="Lưu vực sông Đà",
+            style_function=lambda feat: {"color": "red", "weight": 2, "fillOpacity": 0},
+        ).add_to(m)
 
     if st.sidebar.checkbox("Mạng sông chính", value=True) and streams_fp.exists():
-        m.add_vector(
-            str(streams_fp),
-            layer_name="Sông suối",
-            style={"color": "blue", "weight": 1},
-        )
+        gdf = gpd.read_file(streams_fp)
+        folium.GeoJson(
+            gdf,
+            name="Sông suối",
+            style_function=lambda feat: {"color": "blue", "weight": 1},
+        ).add_to(m)
 
 
 def add_dem_soil_layers(m):
-    """DEM & soil."""
-    # DEM có thể là bản gốc hoặc bản đã giảm kích thước để web ( *_web.tif )
     dem_fp_web = DATA_DIR / "DEM_DaRiver_WGS84_web.tif"
     dem_fp_full = DATA_DIR / "DEM_DaRiver_WGS84.tif"
     dem_fp = dem_fp_web if dem_fp_web.exists() else dem_fp_full
 
     soil_fp = DATA_DIR / "Soil_HWSD_Dariver.tif"
 
-    # DEM
     if st.sidebar.checkbox("DEM địa hình", value=False) and dem_fp.exists():
         add_raster_overlay(
             m,
@@ -261,7 +219,6 @@ def add_dem_soil_layers(m):
             opacity=0.6,
         )
 
-    # HWSD
     if st.sidebar.checkbox("Bản đồ đất (HWSD)", value=False) and soil_fp.exists():
         add_raster_overlay(
             m,
@@ -273,13 +230,12 @@ def add_dem_soil_layers(m):
 
 
 def add_lulc_layers(m):
-    """Lớp sử dụng đất / che phủ (LULC) theo năm."""
     st.sidebar.subheader("LULC theo năm")
 
     year = st.sidebar.selectbox(
         "Chọn năm LULC",
         options=["Không hiển thị", 2020, 2021, 2022, 2023, 2024],
-        index=4,  # mặc định 2024
+        index=4,
     )
 
     if year == "Không hiển thị":
@@ -292,16 +248,15 @@ def add_lulc_layers(m):
         st.sidebar.warning(f"Không tìm thấy file {tif_name} trong thư mục data/")
         return
 
-    # Vẽ LULC với palette rời rạc giống GEE
     add_lulc_overlay(
         m,
         lulc_fp,
         layer_name=f"LULC {year}",
-        nodata=0,           # 0 = ngoài lưu vực → trong suốt
-        opacity=0.9,        # màu đậm, rõ
+        nodata=0,
+        opacity=0.9,
     )
 
-    # Hiển thị chú giải nhỏ trong sidebar
+    # Chú giải
     with st.sidebar.expander("Chú giải lớp phủ"):
         for code in sorted(LULC_CLASSES.keys()):
             name, color = LULC_CLASSES[code]
@@ -317,8 +272,10 @@ def add_lulc_layers(m):
             )
 
 
-def add_reservoir_hydro_layers(m):
-    """Hồ chứa & nhà máy thủy điện + trạm thủy văn."""
+def add_reservoir_layers(m):
+    """Hồ chứa & nhà máy thủy điện + trạm thủy văn.
+    Hồ chứa TQ sẽ được dùng để bắt sự kiện click.
+    """
     st.sidebar.subheader("Hồ chứa & Thủy điện")
 
     res_vn = DATA_DIR / "Reservoirs_Dariverbasin_Vietnam.gpkg"
@@ -328,39 +285,82 @@ def add_reservoir_hydro_layers(m):
     hydro_station = DATA_DIR / "Hydro_Station_Vietnam.gpkg"
 
     if st.sidebar.checkbox("Hồ chứa (VN)", value=False) and res_vn.exists():
-        m.add_vector(
-            str(res_vn),
-            layer_name="Hồ chứa VN",
-            style={"color": "cyan", "weight": 1, "fillOpacity": 0.5},
-        )
+        gdf_vn = gpd.read_file(res_vn)
+        folium.GeoJson(
+            gdf_vn,
+            name="Hồ chứa VN",
+            style_function=lambda feat: {"color": "cyan", "weight": 1, "fillOpacity": 0.5},
+            tooltip=folium.GeoJsonTooltip(fields=["Name"], aliases=["Hồ chứa:"]),
+        ).add_to(m)
 
-    if st.sidebar.checkbox("Hồ chứa (TQ)", value=False) and res_cn.exists():
-        m.add_vector(
-            str(res_cn),
-            layer_name="Hồ chứa TQ",
-            style={"color": "magenta", "weight": 1, "fillOpacity": 0.5},
-        )
+    # Hồ chứa TQ (có click)
+    gdf_cn = None
+    if st.sidebar.checkbox("Hồ chứa (TQ)", value=True) and res_cn.exists():
+        gdf_cn = gpd.read_file(res_cn)
+        folium.GeoJson(
+            gdf_cn,
+            name="Hồ chứa TQ",
+            style_function=lambda feat: {"color": "magenta", "weight": 1, "fillOpacity": 0.5},
+            highlight_function=lambda feat: {"weight": 3, "color": "yellow"},
+            tooltip=folium.GeoJsonTooltip(fields=["Name"], aliases=["Hồ chứa:"]),
+        ).add_to(m)
 
     if st.sidebar.checkbox("Nhà máy thủy điện (VN)", value=False) and hyd_vn.exists():
-        m.add_vector(
-            str(hyd_vn),
-            layer_name="Nhà máy thủy điện VN",
-            style={"color": "orange", "radius": 4},
-        )
+        gdf = gpd.read_file(hyd_vn)
+        folium.GeoJson(
+            gdf,
+            name="Nhà máy thủy điện VN",
+        ).add_to(m)
 
     if st.sidebar.checkbox("Nhà máy thủy điện (TQ)", value=False) and hyd_cn.exists():
-        m.add_vector(
-            str(hyd_cn),
-            layer_name="Nhà máy thủy điện TQ",
-            style={"color": "purple", "radius": 4},
-        )
+        gdf = gpd.read_file(hyd_cn)
+        folium.GeoJson(
+            gdf,
+            name="Nhà máy thủy điện TQ",
+        ).add_to(m)
 
     if st.sidebar.checkbox("Trạm thủy văn (VN)", value=False) and hydro_station.exists():
-        m.add_vector(
-            str(hydro_station),
-            layer_name="Trạm thủy văn VN",
-            style={"color": "blue", "radius": 4},
-        )
+        gdf = gpd.read_file(hydro_station)
+        folium.GeoJson(
+            gdf,
+            name="Trạm thủy văn VN",
+        ).add_to(m)
+
+    return gdf_cn  # dùng để lấy danh sách tên hồ
+
+
+# ---------------------------------------------------------------------
+# Phần hiển thị ảnh kết quả hồ chứa
+# ---------------------------------------------------------------------
+def get_available_reservoirs_from_plots():
+    """Danh sách hồ có folder ảnh trong data/reservoir_plots."""
+    if not RES_PLOT_DIR.exists():
+        return []
+    return sorted([p.name for p in RES_PLOT_DIR.iterdir() if p.is_dir()])
+
+
+def show_reservoir_plots(res_name: str):
+    """Hiển thị toàn bộ ảnh PNG trong folder data/reservoir_plots/<res_name>."""
+    if not res_name:
+        return
+    folder = RES_PLOT_DIR / res_name
+    if not folder.exists():
+        st.warning(f"Không tìm thấy thư mục ảnh cho hồ **{res_name}** trong `data/reservoir_plots/`.")
+        return
+
+    st.markdown(f"### 📊 Kết quả phân tích cho hồ: **{res_name}**")
+
+    img_files = [f for f in os.listdir(folder) if f.lower().endswith(".png")]
+    if not img_files:
+        st.info("Thư mục không có file `.png` nào.")
+        return
+
+    # Hiển thị dạng 3 cột
+    cols = st.columns(3)
+    for i, fname in enumerate(sorted(img_files)):
+        path = folder / fname
+        with cols[i % 3]:
+            st.image(Image.open(path), caption=fname, use_column_width=True)
 
 
 # ---------------------------------------------------------------------
@@ -380,27 +380,100 @@ def main():
 
         * Bật/tắt các lớp: ranh lưu vực, sông suối, DEM, soil, LULC.
         * Xem bản đồ hồ chứa, nhà máy thủy điện, trạm thủy văn.
-        * Chọn năm LULC (2020–2024) để so sánh biến động sử dụng đất.
+        * Khi **kích vào hồ chứa (TQ)** hoặc chọn trong danh sách → hiển thị bộ ảnh kết quả phân tích (AEV, time-series...).
         """
     )
 
-    # Khởi tạo bản đồ
-    m = leafmap.Map(
-        center=DEFAULT_CENTER,
-        zoom=DEFAULT_ZOOM,
-        draw_control=False,
-        measure_control=True,
-        fullscreen_control=True,
+    # ---------------- NỀN BẢN ĐỒ ----------------
+    st.sidebar.subheader("Nền bản đồ")
+
+    basemap_name = st.sidebar.selectbox(
+        "Chọn nền bản đồ",
+        options=["OpenStreetMap", "OpenTopoMap", "Esri.WorldImagery"],
+        index=2,
     )
 
-    # Thứ tự: LULC (nền), DEM/Soil, đường biên, hồ chứa
+    if basemap_name == "OpenStreetMap":
+        tiles = "OpenStreetMap"
+        attr = None
+    elif basemap_name == "OpenTopoMap":
+        tiles = "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
+        attr = "© OpenTopoMap contributors"
+    else:  # Esri.WorldImagery
+        tiles = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        attr = "Tiles © Esri"
+
+    m = folium.Map(
+        location=DEFAULT_CENTER,
+        zoom_start=DEFAULT_ZOOM,
+        tiles=tiles,
+        attr=attr,
+        control_scale=True,
+    )
+
+    # Lớp nhãn Việt Nam (Hoàng Sa, Trường Sa...)
+    if st.sidebar.checkbox("Bật lớp nhãn Việt Nam (Hoàng Sa, Trường Sa...)", value=False):
+        vn_label_url = (
+            "https://tiles.arcgis.com/tiles/EaQ3hSM51DBnlwMq/"
+            "arcgis/rest/services/VietnamLabels/MapServer/tile/{z}/{y}/{x}"
+        )
+        folium.TileLayer(
+            vn_label_url,
+            name="Vietnam labels (Esri)",
+            attr="Esri VietnamLabels",
+            overlay=True,
+            control=True,
+        ).add_to(m)
+
+    # Thứ tự vẽ lớp
     add_lulc_layers(m)
     add_dem_soil_layers(m)
     add_basin_layers(m)
-    add_reservoir_hydro_layers(m)
-    add_basemap_control(m)
+    gdf_cn = add_reservoir_layers(m)
 
-    m.to_streamlit(height=750)
+    folium.LayerControl(collapsed=False).add_to(m)
+
+    # ---------------- HIỂN THỊ MAP & BẮT SỰ KIỆN CLICK ----------------
+    if "selected_reservoir" not in st.session_state:
+        st.session_state.selected_reservoir = ""
+
+    map_data = st_folium(
+        m,
+        width=None,
+        height=700,
+        returned_objects=["last_active_drawing"],
+    )
+
+    # Nếu click vào hồ chứa (TQ), lấy thuộc tính Name
+    if map_data and map_data.get("last_active_drawing"):
+        props = map_data["last_active_drawing"].get("properties", {})
+        clicked_name = props.get("Name")  # chú ý: đúng tên trường trong GPKG
+        if clicked_name:
+            st.session_state.selected_reservoir = clicked_name
+
+    # ---------------- SIDEBAR: CHỌN HỒ BẰNG LIST ----------------
+    # (Phòng khi người dùng muốn chọn trực tiếp mà không cần click map)
+    available_res = get_available_reservoirs_from_plots()
+    if available_res:
+        default_index = 0
+        if st.session_state.selected_reservoir in available_res:
+            default_index = available_res.index(st.session_state.selected_reservoir)
+        selected_from_list = st.sidebar.selectbox(
+            "Hoặc chọn hồ để xem ảnh:",
+            options=available_res,
+            index=default_index,
+        )
+        st.session_state.selected_reservoir = selected_from_list
+
+    # ---------------- HIỂN THỊ ẢNH KẾT QUẢ ----------------
+    st.markdown("---")
+    if st.session_state.selected_reservoir:
+        show_reservoir_plots(st.session_state.selected_reservoir)
+    else:
+        st.info(
+            "👉 Hãy **click vào một hồ chứa (TQ)** trên bản đồ "
+            "hoặc chọn từ danh sách bên trái để xem ảnh kết quả."
+        )
 
 
 if __name__ == "__main__":

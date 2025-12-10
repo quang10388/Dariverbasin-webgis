@@ -1,5 +1,7 @@
 streamlit
 leafmap
+folium
+streamlit-folium
 
 # GIS & raster/vector
 geopandas
@@ -14,3 +16,4 @@ pyproj
 matplotlib
 numpy
 pandas
+pillow
