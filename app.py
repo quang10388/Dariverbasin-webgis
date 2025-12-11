@@ -108,6 +108,97 @@ def add_raster_overlay(
         cross_origin=False,
     )
     img_overlay.add_to(m)
+def add_categorical_raster_overlay(
+    m,
+    raster_path: Path,
+    layer_name: str,
+    nodata: float | int | None = None,
+    opacity: float = 0.8,
+    max_size: int = 2000,
+):
+    """
+    Vẽ raster phân loại (ví dụ bản đồ đất HWSD) với màu rời rạc cho từng giá trị.
+
+    Trả về:
+        dict {giá_trị_pixel: "#rrggbb"} để dùng vẽ chú giải bên sidebar.
+    """
+    raster_path = Path(raster_path)
+    if not raster_path.exists():
+        st.sidebar.warning(f"Không tìm thấy raster: {raster_path.name}")
+        return {}
+
+    import matplotlib.cm as cm
+
+    with rasterio.open(raster_path) as src:
+        height, width = src.height, src.width
+        scale = max(height, width) / max_size if max(height, width) > max_size else 1.0
+
+        if scale > 1.0:
+            out_shape = (int(height / scale), int(width / scale))
+            data = src.read(
+                1,
+                out_shape=out_shape,
+                resampling=Resampling.nearest,  # giữ nguyên mã lớp, không nội suy
+            )
+        else:
+            data = src.read(1)
+        bounds = src.bounds
+        if nodata is None:
+            nodata = src.nodata
+
+    data = data.astype("int64")
+
+    # Xác định vùng nodata
+    mask = ~np.isfinite(data)
+    if nodata is not None:
+        mask |= data == nodata
+
+    valid = ~mask
+    if not np.any(valid):
+        st.sidebar.warning(f"{layer_name}: tất cả pixel đều là nodata – không hiển thị.")
+        return {}
+
+    # Các giá trị lớp (4285, 4287, 4404, 7001, ...)
+    unique_vals = np.unique(data[valid])
+    n_classes = len(unique_vals)
+
+    # Colormap rời rạc: mỗi lớp một màu
+    cmap = cm.get_cmap("tab20", n_classes)
+
+    h, w = data.shape
+    img = np.zeros((h, w, 4), dtype=np.uint8)
+
+    # Dict để trả ra làm chú giải
+    classes: dict[int, str] = {}
+
+    for idx, val in enumerate(unique_vals):
+        rgba = cmap(idx)  # (r, g, b, a) 0–1
+        r, g, b, _ = (np.array(rgba) * 255).astype(np.uint8)
+        a = int(255 * opacity)
+
+        mask_val = data == val
+        img[mask_val, 0] = r
+        img[mask_val, 1] = g
+        img[mask_val, 2] = b
+        img[mask_val, 3] = a
+
+        # Màu dạng #rrggbb để vẽ chú giải
+        classes[int(val)] = f"#{r:02x}{g:02x}{b:02x}"
+
+    # nodata → trong suốt
+    img[mask, 3] = 0
+
+    img_overlay = ImageOverlay(
+        image=img,
+        bounds=[[bounds.bottom, bounds.left], [bounds.top, bounds.right]],
+        opacity=1.0,
+        name=layer_name,
+        interactive=True,
+        cross_origin=False,
+    )
+    img_overlay.add_to(m)
+
+    return classes
 
 
 def add_lulc_overlay(
@@ -204,12 +295,15 @@ def add_basin_layers(m):
 
 
 def add_dem_soil_layers(m):
+    """DEM & soil."""
+    # DEM có thể là bản gốc hoặc bản đã giảm kích thước để web ( *_web.tif )
     dem_fp_web = DATA_DIR / "DEM_DaRiver_WGS84_web.tif"
     dem_fp_full = DATA_DIR / "DEM_DaRiver_WGS84.tif"
     dem_fp = dem_fp_web if dem_fp_web.exists() else dem_fp_full
 
     soil_fp = DATA_DIR / "Soil_HWSD_Dariver.tif"
 
+    # DEM: dữ liệu liên tục → dùng add_raster_overlay như trước
     if st.sidebar.checkbox("DEM địa hình", value=False) and dem_fp.exists():
         add_raster_overlay(
             m,
@@ -219,14 +313,32 @@ def add_dem_soil_layers(m):
             opacity=0.6,
         )
 
+    # Soil HWSD: raster phân loại → dùng add_categorical_raster_overlay
+    soil_classes = {}
     if st.sidebar.checkbox("Bản đồ đất (HWSD)", value=False) and soil_fp.exists():
-        add_raster_overlay(
+        soil_classes = add_categorical_raster_overlay(
             m,
             soil_fp,
             layer_name="Soil HWSD",
-            colormap="viridis",
-            opacity=0.6,
+            opacity=0.8,
         )
+
+    # Vẽ chú giải mã đất (giống kiểu Paletted của QGIS)
+    if soil_classes:
+        with st.sidebar.expander("Chú giải Soil HWSD"):
+            st.write("Giá trị mã đất (HWSD):")
+            for val in sorted(soil_classes.keys()):
+                color = soil_classes[val]
+                st.markdown(
+                    f"""
+                    <div style="display:flex;align-items:center;margin-bottom:4px">
+                        <div style="width:14px;height:14px;background:{color};
+                                    border:1px solid #555;margin-right:6px"></div>
+                        <span>{val}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 def add_lulc_layers(m):
