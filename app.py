@@ -25,6 +25,8 @@ LULC_CLASSES = {
 # --- Cấu hình chung ---
 DATA_DIR = Path(__file__).parent / "data"
 RES_PLOT_DIR = DATA_DIR / "reservoir_plots"
+LULC_FIG_DIR = DATA_DIR / "LULC"
+
 
 # Tâm bản đồ khoảng lưu vực sông Đà
 DEFAULT_CENTER = [21.5, 104.5]  # [lat, lon]
@@ -474,6 +476,27 @@ def show_reservoir_plots(res_name: str):
         with cols[i % 3]:
             st.image(Image.open(path), caption=fname, use_column_width=True)
 
+def show_lulc_figures():
+    """Hiển thị các hình ảnh tổng hợp LULC trong thư mục data/LULC."""
+    folder = LULC_FIG_DIR
+    if not folder.exists():
+        st.info("Không tìm thấy thư mục `data/LULC`.")
+        return
+
+    img_files = [f for f in os.listdir(folder) if f.lower().endswith(".png")]
+    if not img_files:
+        st.info("Thư mục `data/LULC` không có file `.png` nào.")
+        return
+
+    st.markdown("## 📈 Tổng hợp kết quả LULC toàn lưu vực")
+
+    # Hiển thị dạng 2 cột cho dễ nhìn
+    cols = st.columns(2)
+    for i, fname in enumerate(sorted(img_files)):
+        path = folder / fname
+        with cols[i % 2]:
+            st.image(str(path), caption=fname, use_column_width=True)
+
 
 # ---------------------------------------------------------------------
 # MAIN
@@ -586,6 +609,10 @@ def main():
             "👉 Hãy **click vào một hồ chứa (TQ)** trên bản đồ "
             "hoặc chọn từ danh sách bên trái để xem ảnh kết quả."
         )
+        # ---------------- ẢNH TỔNG HỢP LULC ----------------
+    with st.expander("📈 Xem các biểu đồ & bản đồ tổng hợp LULC", expanded=False):
+        show_lulc_figures()
+
 
 
 if __name__ == "__main__":
