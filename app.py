@@ -274,24 +274,39 @@ def add_lulc_overlay(
 # Vector layers (lưu vực, sông suối, hồ chứa, nhà máy...)
 # ---------------------------------------------------------------------
 def add_basin_layers(m):
-    basin_fp = DATA_DIR / "Da_River_Basin.gpkg"
+    # Lưu vực sông Đà
+    basin_da_fp = DATA_DIR / "Da_River_Basin.gpkg"
     streams_fp = DATA_DIR / "Da_Streams.gpkg"
+
+    # Lưu vực sông Hồng (file mới bạn đã thêm)
+    basin_hong_fp = DATA_DIR / "Hong_River_Basin.gpkg"
 
     st.sidebar.subheader("Lưu vực & sông suối")
 
-    if st.sidebar.checkbox("Ranh lưu vực Đà", value=True) and basin_fp.exists():
-        gdf = gpd.read_file(basin_fp)
+    # ---- Lưu vực sông Đà ----
+    if st.sidebar.checkbox("Ranh lưu vực Đà", value=True) and basin_da_fp.exists():
+        gdf = gpd.read_file(basin_da_fp)
         folium.GeoJson(
             gdf,
             name="Lưu vực sông Đà",
             style_function=lambda feat: {"color": "red", "weight": 2, "fillOpacity": 0},
         ).add_to(m)
 
-    if st.sidebar.checkbox("Mạng sông chính", value=True) and streams_fp.exists():
+    # ---- Lưu vực sông Hồng ----
+    if st.sidebar.checkbox("Ranh lưu vực Hồng", value=False) and basin_hong_fp.exists():
+        gdf_hong = gpd.read_file(basin_hong_fp)
+        folium.GeoJson(
+            gdf_hong,
+            name="Lưu vực sông Hồng",
+            style_function=lambda feat: {"color": "purple", "weight": 2, "fillOpacity": 0},
+        ).add_to(m)
+
+    # ---- Mạng sông chính (sông Đà) ----
+    if st.sidebar.checkbox("Mạng sông chính (Đà)", value=True) and streams_fp.exists():
         gdf = gpd.read_file(streams_fp)
         folium.GeoJson(
             gdf,
-            name="Sông suối",
+            name="Sông suối Đà",
             style_function=lambda feat: {"color": "blue", "weight": 1},
         ).add_to(m)
 
@@ -346,44 +361,72 @@ def add_dem_soil_layers(m):
 def add_lulc_layers(m):
     st.sidebar.subheader("LULC theo năm")
 
-    year = st.sidebar.selectbox(
-        "Chọn năm LULC",
+    # ===== LULC lưu vực sông Đà =====
+    year_da = st.sidebar.selectbox(
+        "Chọn năm LULC (sông Đà)",
         options=["Không hiển thị", 2020, 2021, 2022, 2023, 2024],
         index=4,
     )
 
-    if year == "Không hiển thị":
-        return
+    any_lulc = False  # cờ để quyết định có vẽ chú giải hay không
 
-    tif_name = f"Phan_loai_{year}.tif"
-    lulc_fp = DATA_DIR / tif_name
+    if year_da != "Không hiển thị":
+        tif_name = f"Phan_loai_{year_da}.tif"
+        lulc_fp = DATA_DIR / tif_name
 
-    if not lulc_fp.exists():
-        st.sidebar.warning(f"Không tìm thấy file {tif_name} trong thư mục data/")
-        return
+        if not lulc_fp.exists():
+            st.sidebar.warning(f"Không tìm thấy file {tif_name} trong thư mục data/")
+        else:
+            add_lulc_overlay(
+                m,
+                lulc_fp,
+                layer_name=f"LULC sông Đà {year_da}",
+                nodata=0,
+                opacity=0.9,
+            )
+            any_lulc = True
 
-    add_lulc_overlay(
-        m,
-        lulc_fp,
-        layer_name=f"LULC {year}",
-        nodata=0,
-        opacity=0.9,
+    # ----- Ngăn cách trên sidebar -----
+    st.sidebar.markdown("---")
+
+    # ===== LULC lưu vực sông Hồng =====
+    year_hong = st.sidebar.selectbox(
+        "Chọn năm LULC (sông Hồng)",
+        options=["Không hiển thị", 2015, 2020, 2025],
+        index=2,  # mặc định chọn 2025
     )
 
-    # Chú giải
-    with st.sidebar.expander("Chú giải lớp phủ"):
-        for code in sorted(LULC_CLASSES.keys()):
-            name, color = LULC_CLASSES[code]
-            st.markdown(
-                f"""
-                <div style="display:flex;align-items:center;margin-bottom:4px">
-                    <div style="width:14px;height:14px;background:{color};
-                                border:1px solid #555;margin-right:6px"></div>
-                    <span>{code}: {name}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
+    if year_hong != "Không hiển thị":
+        hong_name = f"LULC_SongHong_{year_hong}.tif"
+        lulc_hong_fp = DATA_DIR / hong_name
+
+        if not lulc_hong_fp.exists():
+            st.sidebar.warning(f"Không tìm thấy file {hong_name} trong thư mục data/")
+        else:
+            add_lulc_overlay(
+                m,
+                lulc_hong_fp,
+                layer_name=f"LULC sông Hồng {year_hong}",
+                nodata=0,
+                opacity=0.9,
             )
+            any_lulc = True
+
+    # ===== CHÚ GIẢI CHUNG CHO LULC (nếu có lớp nào đang bật) =====
+    if any_lulc:
+        with st.sidebar.expander("Chú giải lớp phủ LULC"):
+            for code in sorted(LULC_CLASSES.keys()):
+                name, color = LULC_CLASSES[code]
+                st.markdown(
+                    f"""
+                    <div style="display:flex;align-items:center;margin-bottom:4px">
+                        <div style="width:14px;height:14px;background:{color};
+                                    border:1px solid #555;margin-right:6px"></div>
+                        <span>{code}: {name}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 def add_reservoir_layers(m):
