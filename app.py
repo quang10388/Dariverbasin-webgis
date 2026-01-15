@@ -14,12 +14,12 @@ from PIL import Image
 
 # ===== BẢNG MÀU LULC (giống GEE) =====
 LULC_CLASSES = {
-    0: ("Loại khác", "#000000"),   # đen
-    1: ("Mặt nước", "#1f78b4"),    # xanh dương
-    2: ("Nông nghiệp", "#ffd92f"), # vàng
-    3: ("Rừng", "#4daf4a"),        # xanh lá
-    4: ("Dân cư", "#e41a1c"),      # đỏ
-    5: ("Đất trống", "#bdbdbd"),   # xám
+    1: ("Đất trống", "#d9d9d9"),   # xám
+    2: ("Dân cư", "#ff0000"),      # đỏ
+    3: ("Rừng", "#00a000"),        # xanh lá
+    4: ("Nông nghiệp", "#ffff00"), # vàng
+    5: ("Mặt nước", "#0000ff"),    # xanh dương
+    6: ("Bề mặt không thấm", "#000000"),  # đen
 }
 
 # --- Cấu hình chung ---
