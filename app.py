@@ -14,12 +14,12 @@ from PIL import Image
 
 # ===== BẢNG MÀU LULC (giống GEE) =====
 LULC_CLASSES = {
-    1: ("Loại khác", "#000000"),   # đen
-    2: ("Mặt nước", "#1f78b4"),    # xanh dương
-    3: ("Nông nghiệp", "#ffd92f"), # vàng
-    4: ("Rừng", "#4daf4a"),        # xanh lá
-    5: ("Dân cư", "#e41a1c"),      # đỏ
-    6: ("Đất trống", "#bdbdbd"),   # xám
+    0: ("Loại khác", "#000000"),   # đen
+    1: ("Mặt nước", "#1f78b4"),    # xanh dương
+    2: ("Nông nghiệp", "#ffd92f"), # vàng
+    3: ("Rừng", "#4daf4a"),        # xanh lá
+    4: ("Dân cư", "#e41a1c"),      # đỏ
+    5: ("Đất trống", "#bdbdbd"),   # xám
 }
 
 # --- Cấu hình chung ---
@@ -207,7 +207,7 @@ def add_lulc_overlay(
     m,
     raster_path: Path,
     layer_name: str,
-    nodata: int | None = 0,
+    nodata: int | None = None,  # không mặc định 0 nữa
     opacity: float = 0.9,
     max_size: int = 2000,
 ):
@@ -381,7 +381,6 @@ def add_lulc_layers(m):
                 m,
                 lulc_fp,
                 layer_name=f"LULC sông Đà {year_da}",
-                nodata=0,
                 opacity=0.9,
             )
             any_lulc = True
@@ -407,7 +406,6 @@ def add_lulc_layers(m):
                 m,
                 lulc_hong_fp,
                 layer_name=f"LULC sông Hồng {year_hong}",
-                nodata=0,
                 opacity=0.9,
             )
             any_lulc = True
