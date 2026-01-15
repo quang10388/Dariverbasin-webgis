@@ -12,14 +12,27 @@ from streamlit_folium import st_folium
 import geopandas as gpd
 from PIL import Image
 
-# ===== BẢNG MÀU LULC (giống GEE) =====
+# Mã lớp LULC theo chú giải GEE:
+# 1: Đất trống, 2: Dân cư, 3: Rừng, 4: Nông nghiệp,
+# 5: Mặt nước, 6: Bề mặt không thấm
 LULC_CLASSES = {
-    1: ("Đất trống", "#d9d9d9"),   # xám
-    2: ("Dân cư", "#ff0000"),      # đỏ
-    3: ("Rừng", "#00a000"),        # xanh lá
-    4: ("Nông nghiệp", "#ffff00"), # vàng
-    5: ("Mặt nước", "#0000ff"),    # xanh dương
+    1: ("Đất trống", "#d9d9d9"),      # xám
+    2: ("Dân cư", "#ff0000"),         # đỏ
+    3: ("Rừng", "#00a000"),           # xanh lá
+    4: ("Nông nghiệp", "#ffff00"),    # vàng
+    5: ("Mặt nước", "#0000ff"),       # xanh dương
     6: ("Bề mặt không thấm", "#000000"),  # đen
+}
+
+# Do file GeoTIFF đang lưu các code bị lệch 1 bậc,
+# ta reclass lại: code thô -> code "chuẩn" theo bảng trên.
+LULC_RECLASS = {
+    1: 2,  # vùng có giá trị 1 trong raster thực chất là "Dân cư"  (2)
+    2: 3,  # 2 -> Rừng
+    3: 4,  # 3 -> Nông nghiệp
+    4: 5,  # 4 -> Mặt nước
+    5: 6,  # 5 -> Bề mặt không thấm
+    6: 1,  # 6 -> Đất trống
 }
 
 # --- Cấu hình chung ---
@@ -207,11 +220,11 @@ def add_lulc_overlay(
     m,
     raster_path: Path,
     layer_name: str,
-    nodata: int | None = None,  # không mặc định 0 nữa
+    nodata: int | None = 0,
     opacity: float = 0.9,
     max_size: int = 2000,
 ):
-    """Vẽ LULC với bảng màu rời rạc LULC_CLASSES."""
+    """Vẽ LULC với bảng màu rời rạc LULC_CLASSES, có reclass lại mã lớp."""
     raster_path = Path(raster_path)
     if not raster_path.exists():
         st.sidebar.warning(f"Không tìm thấy raster: {raster_path.name}")
@@ -219,7 +232,6 @@ def add_lulc_overlay(
 
     with rasterio.open(raster_path) as src:
         height, width = src.height, src.width
-        # Giảm kích thước nếu raster quá lớn
         scale = max(height, width) / max_size if max(height, width) > max_size else 1.0
 
         if scale > 1.0:
@@ -227,15 +239,11 @@ def add_lulc_overlay(
             data = src.read(
                 1,
                 out_shape=out_shape,
-                resampling=Resampling.nearest,  # giữ nguyên mã lớp
+                resampling=Resampling.nearest,
             )
         else:
             data = src.read(1)
-
         bounds = src.bounds
-        # Nếu chưa truyền nodata thì đọc từ metadata của raster
-        if nodata is None:
-            nodata = src.nodata
 
     data = data.astype("int32")
 
@@ -244,12 +252,22 @@ def add_lulc_overlay(
     if nodata is not None:
         mask |= data == nodata
 
+    # --- RECLASS: chuyển code thô -> code chuẩn theo LULC_CLASSES ---
+    if LULC_RECLASS:
+        data_re = np.zeros_like(data)
+        # giá trị được map
+        for raw_val, new_val in LULC_RECLASS.items():
+            data_re[data == raw_val] = new_val
+        # giá trị không có trong bảng reclass giữ nguyên
+        unmapped = ~np.isin(data, list(LULC_RECLASS.keys()))
+        data_re[unmapped] = data[unmapped]
+        data = data_re
+
     codes = sorted(LULC_CLASSES.keys())
     max_code = max(codes)
-
-    # Mọi giá trị ngoài [0, max_code] đều đưa về 0
+    # Mọi giá trị ngoài [0, max_code] cho về 0 (background)
     data = np.where((data >= 0) & (data <= max_code), data, 0)
-    # Các pixel nodata cũng đưa về 0
+    # Nodata -> 0
     data = np.where(mask, 0, data)
 
     # Bảng tra màu RGBA, index = mã lớp
@@ -265,8 +283,7 @@ def add_lulc_overlay(
         lut[code, 2] = b
         lut[code, 3] = int(255 * opacity)
 
-    # GIẢI PHÁP CHÍNH: lớp 0 (background) làm TRONG SUỐT
-    # -> không còn ô vuông đen bao ngoài
+    # Lớp background (0) để trong suốt
     lut[0, 3] = 0
 
     img = lut[data]  # (H, W, 4)
