@@ -219,6 +219,7 @@ def add_lulc_overlay(
 
     with rasterio.open(raster_path) as src:
         height, width = src.height, src.width
+        # Giảm kích thước nếu raster quá lớn
         scale = max(height, width) / max_size if max(height, width) > max_size else 1.0
 
         if scale > 1.0:
@@ -226,11 +227,15 @@ def add_lulc_overlay(
             data = src.read(
                 1,
                 out_shape=out_shape,
-                resampling=Resampling.nearest,
+                resampling=Resampling.nearest,  # giữ nguyên mã lớp
             )
         else:
             data = src.read(1)
+
         bounds = src.bounds
+        # Nếu chưa truyền nodata thì đọc từ metadata của raster
+        if nodata is None:
+            nodata = src.nodata
 
     data = data.astype("int32")
 
@@ -241,7 +246,10 @@ def add_lulc_overlay(
 
     codes = sorted(LULC_CLASSES.keys())
     max_code = max(codes)
+
+    # Mọi giá trị ngoài [0, max_code] đều đưa về 0
     data = np.where((data >= 0) & (data <= max_code), data, 0)
+    # Các pixel nodata cũng đưa về 0
     data = np.where(mask, 0, data)
 
     # Bảng tra màu RGBA, index = mã lớp
@@ -256,6 +264,10 @@ def add_lulc_overlay(
         lut[code, 1] = g
         lut[code, 2] = b
         lut[code, 3] = int(255 * opacity)
+
+    # GIẢI PHÁP CHÍNH: lớp 0 (background) làm TRONG SUỐT
+    # -> không còn ô vuông đen bao ngoài
+    lut[0, 3] = 0
 
     img = lut[data]  # (H, W, 4)
 
